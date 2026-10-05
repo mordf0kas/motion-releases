@@ -56,9 +56,14 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
-          T="Motion_VST3 Motion_Standalone"
+          T="Motion_VST3 MotionTests"
           [ "${{ matrix.os }}" = "macos-latest" ] && [ "1" = "1" ] && T="$T Motion_AU"
           cmake --build build --config Release --target $T --parallel 4
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ./build/MotionTests_artefacts/Release/MotionTests.exe
+          else
+            ./build/MotionTests_artefacts/Release/MotionTests
+          fi
           mkdir -p out
           sed -n 's/^project(Motion VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt > out/VERSION
       - name: Package macOS installer (.pkg, ad-hoc signed, quarantine stripped)
@@ -68,16 +73,15 @@ jobs:
           set -euo pipefail
           R="build/Motion_artefacts/Release"; P="Motion"
           # JUCE writes moduleinfo.json after signing: re-sign so Apple Silicon hosts load the bundles
-          for b in "$R/VST3/$P.vst3" "$R/Standalone/$P.app" "$R/AU/$P.component"; do
+          for b in "$R/VST3/$P.vst3" "$R/AU/$P.component"; do
             [ -e "$b" ] && codesign --force --deep --sign - "$b" && codesign --verify --deep --strict "$b"
           done
-          mkdir -p pkg_root/Applications pkg_root/Library/Audio/Plug-Ins/VST3 pkg_root/Library/Audio/Plug-Ins/Components pkg_scripts
+          mkdir -p pkg_root/Library/Audio/Plug-Ins/VST3 pkg_root/Library/Audio/Plug-Ins/Components pkg_scripts
           cp -R "$R/VST3/$P.vst3" pkg_root/Library/Audio/Plug-Ins/VST3/
-          cp -R "$R/Standalone/$P.app" pkg_root/Applications/
           [ -e "$R/AU/$P.component" ] && cp -R "$R/AU/$P.component" pkg_root/Library/Audio/Plug-Ins/Components/
           cat > pkg_scripts/postinstall <<EOS
           #!/bin/bash
-          xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/$P.vst3" "/Library/Audio/Plug-Ins/Components/$P.component" "/Applications/$P.app" 2>/dev/null || true
+          xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/$P.vst3" "/Library/Audio/Plug-Ins/Components/$P.component" 2>/dev/null || true
           exit 0
           EOS
           chmod +x pkg_scripts/postinstall
@@ -90,8 +94,9 @@ jobs:
         if: steps.gate.outputs.run == 'true' && matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\Motion.iss
           $v = (Get-Content out\VERSION).Trim()
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" installer\Motion.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed" }
           Get-ChildItem installer_out\*.exe | Select-Object -First 1 | Copy-Item -Destination "out\Motion-v$v-Windows-Setup.exe"
       - uses: actions/upload-artifact@v4
         if: steps.gate.outputs.run == 'true'
